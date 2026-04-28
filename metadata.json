@@ -1,0 +1,7 @@
+{
+  "name": "SAGITTARIUS WORLD",
+  "description": "Tactical disaster and war situation awareness platform with AI-powered terrain analysis and navigation.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}

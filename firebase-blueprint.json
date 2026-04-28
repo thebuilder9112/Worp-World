@@ -1,0 +1,83 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Stores basic user information and preferences.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Unique identifier for the user." },
+        "email": { "type": "string", "format": "email", "description": "User's email address." },
+        "displayName": { "type": "string", "description": "User's display name." },
+        "photoURL": { "type": "string", "format": "uri", "description": "User's profile picture URL." },
+        "lastLogin": { "type": "string", "format": "date-time", "description": "Timestamp of the last login." }
+      },
+      "required": ["uid", "email"]
+    },
+    "PublicProfile": {
+      "title": "Public Profile",
+      "description": "Publicly visible unit information for tactical coordination.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Unique identifier for the user." },
+        "displayName": { "type": "string", "description": "User's display name." },
+        "photoURL": { "type": "string", "format": "uri", "description": "User's profile picture URL." },
+        "lastLocation": {
+          "type": "object",
+          "properties": {
+            "lat": { "type": "number" },
+            "lng": { "type": "number" },
+            "timestamp": { "type": "string", "format": "date-time" }
+          }
+        },
+        "status": { "type": "string", "description": "Unit operational status." }
+      },
+      "required": ["uid"]
+    },
+    "RouteHistory": {
+      "title": "Tactical Route History",
+      "description": "Stores historical tactical routes calculated by the user.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "The UID of the user who created the route." },
+        "startPlace": { "type": "string", "description": "Starting location name." },
+        "endPlace": { "type": "string", "description": "Destination location name." },
+        "mode": { "type": "string", "description": "Transport mode used." },
+        "timestamp": { "type": "string", "format": "date-time", "description": "When the route was calculated." },
+        "distance": { "type": "number", "description": "Total distance in meters." }
+      },
+      "required": ["userId", "startPlace", "endPlace", "timestamp"]
+    },
+    "Share": {
+      "title": "Share",
+      "description": "Stores shared locations or routes for real-time tactical coordination.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "The UID of the user who shared the location/route." },
+        "type": { "type": "string", "enum": ["live", "location", "route"], "description": "The type of share." },
+        "data": { "type": "object", "description": "The shared data (coordinates or points)." },
+        "timestamp": { "type": "string", "format": "date-time", "description": "When the share was created." },
+        "expiresAt": { "type": "string", "format": "date-time", "description": "Optional expiration time." },
+        "active": { "type": "boolean", "description": "Whether the share is currently active." }
+      },
+      "required": ["userId", "type", "data", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile document."
+    },
+    "/users/{userId}/history/{historyId}": {
+      "schema": "RouteHistory",
+      "description": "Tactical route history records."
+    },
+    "/public_profiles/{userId}": {
+      "schema": "PublicProfile",
+      "description": "Publicly visible tactical unit data."
+    },
+    "/shares/{shareId}": {
+      "schema": "Share",
+      "description": "Shared tactical data."
+    }
+  }
+}

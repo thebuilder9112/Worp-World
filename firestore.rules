@@ -1,0 +1,158 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - uid: string (required)
+    //   - email: string (required, email format)
+    //   - displayName: string (optional)
+    //   - photoURL: string (optional, URL format)
+    //   - lastLogin: string (optional, ISO date)
+    //
+    // Collection: users/{userId}/history
+    // Document ID: {historyId}
+    // Fields:
+    //   - location: map (required, lat/lng)
+    //   - timestamp: timestamp (required)
+    //
+    // ===============================================================
+
+    // Collection: shares
+    // Document ID: {shareId}
+    // Fields:
+    //   - userId: string (required, must match auth.uid)
+    //   - type: string (required, enum: live, location, route)
+    //   - data: map (required)
+    //   - timestamp: string (required, ISO date)
+    //   - expiresAt: string (optional, ISO date)
+    //   - active: boolean (optional)
+    //
+    // ===============================================================
+    //
+    // Collection: public_profiles
+    // Document ID: {userId}
+    // Fields:
+    //   - uid: string (required)
+    //   - displayName: string (optional)
+    //   - photoURL: string (optional, URL format)
+    //   - lastLocation: map (optional)
+    //   - status: string (optional)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.userId;
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          request.auth.token.email == "aumchauhan11@gmail.com");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    function isValidUser(data) {
+      return data.uid == request.auth.uid &&
+             isValidEmail(data.email) &&
+             (data.displayName == null || (data.displayName is string && data.displayName.size() < 100)) &&
+             (data.lastLogin == null || isValidDateString(data.lastLogin)) &&
+             (data.lastLocation == null || (
+               data.lastLocation is map &&
+               data.lastLocation.lat is number &&
+               data.lastLocation.lng is number &&
+               isValidDateString(data.lastLocation.timestamp)
+             ));
+    }
+
+    function isValidHistory(data, userId) {
+      return userId == request.auth.uid &&
+             data.location is map &&
+             data.location.lat is number &&
+             data.location.lng is number &&
+             (data.timestamp is timestamp || isValidDateString(data.timestamp));
+    }
+
+    function isValidPublicProfile(data) {
+      return data.uid == request.auth.uid &&
+             (data.displayName == null || (data.displayName is string && data.displayName.size() < 100)) &&
+             (data.photoURL == null || (data.photoURL is string && data.photoURL.size() < 500)) &&
+             (data.lastLocation == null || (
+               data.lastLocation is map &&
+               data.lastLocation.lat is number &&
+               data.lastLocation.lng is number &&
+               isValidDateString(data.lastLocation.timestamp)
+             )) &&
+             (data.status == null || (data.status is string && data.status.size() < 50));
+    }
+
+    function isValidShare(data) {
+      return data.userId == request.auth.uid &&
+             data.type in ['live', 'location', 'route'] &&
+             data.data is map &&
+             isValidDateString(data.timestamp) &&
+             (data.expiresAt == null || isValidDateString(data.expiresAt)) &&
+             (data.active == null || data.active is bool);
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.uid == resource.data.uid;
+
+      match /history/{historyId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId) && isValidHistory(request.resource.data, userId);
+        allow update: if isOwner(userId) && isValidHistory(request.resource.data, userId);
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+    }
+
+    match /public_profiles/{userId} {
+      allow get, list: if isAuthenticated();
+      allow create: if isOwner(userId) && isValidPublicProfile(request.resource.data);
+      allow update: if isOwner(userId) && isValidPublicProfile(request.resource.data) && request.resource.data.uid == resource.data.uid;
+    }
+
+    match /shares/{shareId} {
+      allow read: if isAuthenticated(); // Any authenticated user can view a shared tactical link
+      allow create: if isAuthenticated() && isValidShare(request.resource.data);
+      allow update: if isDocOwner() && isValidShare(request.resource.data) && request.resource.data.userId == resource.data.userId;
+      allow delete: if isDocOwner() || isAdmin();
+    }
+
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}
