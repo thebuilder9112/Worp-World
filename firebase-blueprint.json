@@ -60,6 +60,58 @@
         "active": { "type": "boolean", "description": "Whether the share is currently active." }
       },
       "required": ["userId", "type", "data", "timestamp"]
+    },
+    "Alert": {
+      "title": "Emergency Alert",
+      "description": "Danger warnings, evacuation orders, and shelter information broadcasts.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Alert headline." },
+        "message": { "type": "string", "description": "Alert details." },
+        "severity": { "type": "string", "enum": ["critical", "warning", "info"], "description": "Alert level." },
+        "zone": {
+          "type": "object",
+          "properties": {
+            "lat": { "type": "number" },
+            "lng": { "type": "number" },
+            "radius": { "type": "number" }
+          },
+          "required": ["lat", "lng", "radius"]
+        },
+        "timestamp": { "type": "string", "format": "date-time", "description": "Alert broadcast time." },
+        "senderId": { "type": "string", "description": "Sender user ID." },
+        "active": { "type": "boolean", "description": "Is this alert active." }
+      },
+      "required": ["title", "message", "severity", "zone", "timestamp", "senderId"]
+    },
+    "Contact": {
+      "title": "Trusted Contact",
+      "description": "Another operator selected for private location sharing.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "The user ID of the contact." },
+        "displayName": { "type": "string", "description": "Display name of the contact." },
+        "email": { "type": "string", "format": "email", "description": "Email of the contact." },
+        "photoURL": { "type": "string", "format": "uri", "description": "Profile picture URL of the contact." },
+        "sharedWith": { "type": "boolean", "description": "Whether the current user is sharing location with this contact." },
+        "status": { "type": "string", "description": "Contact's tactical status." },
+        "addedAt": { "type": "string", "format": "date-time", "description": "When the contact was added." }
+      },
+      "required": ["uid", "displayName", "email", "sharedWith"]
+    },
+    "OfflineRegion": {
+      "title": "Offline Region",
+      "description": "Metadata for pre-downloaded map regions for offline operations.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Name of the downloaded region." },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
+        "radius": { "type": "number" },
+        "tileCount": { "type": "number", "description": "Number of cached tile files." },
+        "downloadedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "lat", "lng", "radius"]
     }
   },
   "firestore": {
@@ -71,6 +123,14 @@
       "schema": "RouteHistory",
       "description": "Tactical route history records."
     },
+    "/users/{userId}/contacts/{contactId}": {
+      "schema": "Contact",
+      "description": "User's trusted contacts list."
+    },
+    "/users/{userId}/offline_regions/{regionId}": {
+      "schema": "OfflineRegion",
+      "description": "User's pre-downloaded offline regions metadata."
+    },
     "/public_profiles/{userId}": {
       "schema": "PublicProfile",
       "description": "Publicly visible tactical unit data."
@@ -78,6 +138,10 @@
     "/shares/{shareId}": {
       "schema": "Share",
       "description": "Shared tactical data."
+    },
+    "/alerts/{alertId}": {
+      "schema": "Alert",
+      "description": "Global crisis alert broadcasts."
     }
   }
 }

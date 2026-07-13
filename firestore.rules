@@ -120,6 +120,34 @@ service cloud.firestore {
              (data.active == null || data.active is bool);
     }
 
+    function isValidAlert(data) {
+      return data.title is string && data.title.size() <= 100 &&
+             data.message is string && data.message.size() <= 1000 &&
+             data.severity in ['critical', 'warning', 'info'] &&
+             data.zone is map &&
+             data.zone.lat is number &&
+             data.zone.lng is number &&
+             data.zone.radius is number &&
+             data.senderId == request.auth.uid &&
+             isValidDateString(data.timestamp);
+    }
+
+    function isValidContact(data) {
+      return data.uid is string && data.uid.size() <= 128 &&
+             data.displayName is string && data.displayName.size() <= 100 &&
+             data.email is string && data.email.size() <= 100 &&
+             data.sharedWith is bool &&
+             (data.status == null || (data.status is string && data.status.size() <= 100));
+    }
+
+    function isValidOfflineRegion(data) {
+      return data.name is string && data.name.size() <= 100 &&
+             data.lat is number &&
+             data.lng is number &&
+             data.radius is number &&
+             (data.tileCount == null || data.tileCount is number);
+    }
+
     // ===============================================================
     // Rules
     // ===============================================================
@@ -136,6 +164,20 @@ service cloud.firestore {
         allow update: if isOwner(userId) && isValidHistory(request.resource.data, userId);
         allow delete: if isOwner(userId) || isAdmin();
       }
+
+      match /contacts/{contactId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId) && isValidContact(request.resource.data);
+        allow update: if isOwner(userId) && isValidContact(request.resource.data) && request.resource.data.uid == resource.data.uid;
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+
+      match /offline_regions/{regionId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId) && isValidOfflineRegion(request.resource.data);
+        allow update: if isOwner(userId) && isValidOfflineRegion(request.resource.data);
+        allow delete: if isOwner(userId) || isAdmin();
+      }
     }
 
     match /public_profiles/{userId} {
@@ -149,6 +191,13 @@ service cloud.firestore {
       allow create: if isAuthenticated() && isValidShare(request.resource.data);
       allow update: if isDocOwner() && isValidShare(request.resource.data) && request.resource.data.userId == resource.data.userId;
       allow delete: if isDocOwner() || isAdmin();
+    }
+
+    match /alerts/{alertId} {
+      allow read, list: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidAlert(request.resource.data);
+      allow update: if isAuthenticated() && (resource.data.senderId == request.auth.uid || isAdmin()) && isValidAlert(request.resource.data);
+      allow delete: if isAuthenticated() && (resource.data.senderId == request.auth.uid || isAdmin());
     }
 
     match /{path=**} {

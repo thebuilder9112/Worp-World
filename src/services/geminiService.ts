@@ -437,3 +437,41 @@ export async function getPlaceInfo(placeName: string, placeDetails: any) {
     return `Tactical briefing for ${placeName} unavailable. (${error?.message || String(error)})`;
   }
 }
+
+export async function generateSectorThreatAlert(lat: number, lng: number) {
+  try {
+    const ai = getAI();
+    const prompt = `You are a military threat intelligence analyst. Generate a realistic crisis or disaster emergency alert based on geographic coordinates: latitude ${lat}, longitude ${lng}.
+    The alert must belong to one of these three severity levels: 'critical', 'warning', or 'info'.
+    Choose a realistic event matching the location (e.g. if near Eastern Europe/Ukraine, tactical sector/shelling alert; if in California, wildfire/earthquake danger; if near Japan, tsunami/typhoon/earthquake warning; if in a major city, infrastructure collapse or civil distress).
+    
+    You MUST respond with a raw JSON object only, in exactly this format:
+    {
+      "title": "Alert Headline",
+      "message": "Detailed emergency warning description and action items for citizens.",
+      "severity": "critical" | "warning" | "info"
+    }
+    
+    Do NOT include any markdown code blocks, backticks, or explanatory text. Just the raw JSON object.`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      config: {
+        maxOutputTokens: 1024,
+      },
+    });
+
+    const text = response.text?.trim() || "";
+    // Clean up any potential markdown code blocks
+    const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
+    return JSON.parse(cleaned);
+  } catch (error) {
+    console.error("Failed to generate threat alert:", error);
+    return {
+      title: "TACTICAL SECTOR WARNING",
+      message: `Active threat activity detected in the vicinity of sector ${lat.toFixed(4)}, ${lng.toFixed(4)}. Avoid main transit lines and seek hard-shelter positions immediately.`,
+      severity: "critical"
+    };
+  }
+}

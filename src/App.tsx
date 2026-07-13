@@ -80,6 +80,11 @@ import {
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { cn } from './lib/utils';
 import { analyzeTerrain, getLiveIntel, describeRoute, chatWithAI, getPlaceInfo } from './services/geminiService';
+import { getCachedTile, calculateFallbackOfflineRoute } from './services/offlineMapService';
+import { EmergencyAlert, Contact, OfflineRegion } from './types';
+import LocationSharingPanel from './components/LocationSharingPanel';
+import OfflineMapPanel from './components/OfflineMapPanel';
+import EmergencyAlertPanel from './components/EmergencyAlertPanel';
 
 // --- Constants & Types ---
 import { 
@@ -87,6 +92,8 @@ import {
   TileLayer, 
   Marker, 
   Popup, 
+  Circle,
+  Polyline,
   useMap as useLeafletMap,
   useMapEvents
 } from 'react-leaflet';
@@ -137,6 +144,8 @@ interface SharePoint {
   data: Location;
   timestamp: any;
   type: 'live' | 'static';
+  status?: string;
+  active?: boolean;
 }
 
 interface ChatMessage {
@@ -568,7 +577,9 @@ const LeafletMapView = ({
   onCameraChange, 
   sharePoints, 
   isDark, 
-  onThemeToggle 
+  onThemeToggle,
+  isOfflineMode,
+  alerts
 }: { 
   coords: [number, number], 
   targetCoords: [number, number] | null,
@@ -578,7 +589,9 @@ const LeafletMapView = ({
   onCameraChange: (lat: number, lng: number, zoom: number) => void,
   sharePoints: SharePoint[],
   isDark: boolean,
-  onThemeToggle?: () => void
+  onThemeToggle?: () => void,
+  isOfflineMode: boolean,
+  alerts: EmergencyAlert[]
 }) => {
   const MapEvents = () => {
     useMapEvents({
@@ -610,6 +623,43 @@ const LeafletMapView = ({
     return null;
   };
 
+  const OfflineTileLayer = () => {
+    const map = useLeafletMap();
+    useEffect(() => {
+      const offlineLayer = new (L.TileLayer.extend({
+        createTile: function (coords: any, done: any) {
+          const tile = document.createElement('img');
+          const url = `https://tile.openstreetmap.org/${coords.z}/${coords.x}/${coords.y}.png`;
+          
+          getCachedTile(url).then(blob => {
+            if (blob) {
+              const objectUrl = URL.createObjectURL(blob);
+              tile.src = objectUrl;
+              done(null, tile);
+            } else {
+              if (isOfflineMode) {
+                // Beautiful dark offline grid placeholder
+                tile.src = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" style="background:%230c0c0e;"><rect width="256" height="256" fill="none" stroke="%231a1a24" stroke-width="2"/><text x="128" y="128" fill="%233f3f52" font-family="monospace" font-size="10" text-anchor="middle" dominant-baseline="middle">OFFLINE SECTOR</text></svg>`;
+                done(null, tile);
+              } else {
+                tile.src = url;
+                done(null, tile);
+              }
+            }
+          });
+          
+          return tile;
+        }
+      }))();
+      
+      offlineLayer.addTo(map);
+      return () => {
+        map.removeLayer(offlineLayer);
+      };
+    }, [map]);
+    return null;
+  };
+
   const tileUrl = isDark 
     ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
     : "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
@@ -638,10 +688,14 @@ const LeafletMapView = ({
         className="w-full h-full z-0"
         zoomControl={false}
       >
-        <TileLayer
-          url={tileUrl}
-          attribution={attribution}
-        />
+        {isOfflineMode ? (
+          <OfflineTileLayer />
+        ) : (
+          <TileLayer
+            url={tileUrl}
+            attribution={attribution}
+          />
+        )}
         <MapEvents />
         <ChangeView center={coords} zoom={zoom} />
         
@@ -666,6 +720,97 @@ const LeafletMapView = ({
             </Popup>
           </Marker>
         )}
+
+        {/* Real-time shared location markers of other operators */}
+        {sharePoints.map((sp, idx) => {
+          const spStatus = sp.status || 'Safe';
+          const isDanger = spStatus === 'In Danger';
+          const indicatorColor = isDanger ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)]' : 'bg-green-500';
+          const pulseClass = isDanger ? 'animate-ping' : '';
+          
+          const operatorIcon = L.divIcon({
+            className: 'custom-operator-icon',
+            html: `<div class="relative flex flex-col items-center">
+                    <div class="w-8 h-8 rounded-full border border-zinc-700 bg-zinc-950 flex items-center justify-center text-xs font-mono font-bold text-map-accent">
+                      ${sp.userName ? sp.userName.substring(0, 2).toUpperCase() : 'OP'}
+                    </div>
+                    <div class="absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full border border-black ${indicatorColor} flex items-center justify-center">
+                      <div class="absolute inset-0 rounded-full ${pulseClass} ${isDanger ? 'bg-red-500/50' : ''}"></div>
+                    </div>
+                  </div>`,
+            iconSize: [32, 32],
+            iconAnchor: [16, 16]
+          });
+
+          return (
+            <Marker key={idx} position={[sp.data.lat, sp.data.lng]} icon={operatorIcon}>
+              <Popup>
+                <div className="bg-zinc-950 text-gray-200 p-2.5 font-mono text-[10px] border border-zinc-800 rounded-lg">
+                  <div className="font-bold border-b border-zinc-800 mb-1 pb-1 uppercase flex justify-between items-center">
+                    <span>{sp.userName || 'TACTICAL UNIT'}</span>
+                    <span className={cn(
+                      "px-1 py-0.5 rounded text-[8px] border",
+                      isDanger ? "bg-red-950/20 text-red-400 border-red-900/40" : "bg-green-950/20 text-green-400 border-green-900/40"
+                    )}>
+                      {spStatus}
+                    </span>
+                  </div>
+                  <div>LAT: {sp.data.lat.toFixed(4)}</div>
+                  <div>LNG: {sp.data.lng.toFixed(4)}</div>
+                  <div className="text-[8px] text-zinc-500 mt-1 uppercase">
+                    LAST FEED: {new Date(sp.timestamp).toLocaleTimeString()}
+                  </div>
+                </div>
+              </Popup>
+            </Marker>
+          );
+        })}
+
+        {/* Emergency Alert transparent circular hazard zones */}
+        {alerts.map((alert) => {
+          const isCritical = alert.severity === 'critical';
+          const strokeColor = isCritical ? '#ef4444' : alert.severity === 'warning' ? '#f59e0b' : '#3b82f6';
+          const fillColor = isCritical ? '#f87171' : alert.severity === 'warning' ? '#fbbf24' : '#60a5fa';
+
+          return (
+            <React.Fragment key={alert.id}>
+              <Circle
+                center={[alert.zone.lat, alert.zone.lng]}
+                radius={alert.zone.radius}
+                pathOptions={{
+                  color: strokeColor,
+                  fillColor: fillColor,
+                  fillOpacity: 0.15,
+                  weight: 1.5,
+                  dashArray: isCritical ? '5, 5' : '1'
+                }}
+              />
+              <Marker 
+                position={[alert.zone.lat, alert.zone.lng]} 
+                icon={L.divIcon({
+                  className: 'custom-alert-marker',
+                  html: `<div class="relative flex items-center justify-center">
+                          <div class="absolute w-5 h-5 bg-red-500/20 rounded-full animate-ping"></div>
+                          <div class="text-xs ${isCritical ? 'text-red-500' : 'text-yellow-500'}">⚠️</div>
+                        </div>`,
+                  iconSize: [16, 16]
+                })}
+              >
+                <Popup>
+                  <div className="bg-zinc-950 text-gray-200 p-2.5 font-mono text-[10px] border border-zinc-800 rounded-lg">
+                    <div className="font-bold border-b border-zinc-800 mb-1 pb-1 uppercase text-red-400 flex items-center gap-1">
+                      <span>⚠️ {alert.title}</span>
+                    </div>
+                    <div className="text-zinc-300 leading-normal mb-1.5">{alert.message}</div>
+                    <div className="text-[8px] text-zinc-500 uppercase">
+                      RADIUS: {(alert.zone.radius / 1000).toFixed(1)}KM
+                    </div>
+                  </div>
+                </Popup>
+              </Marker>
+            </React.Fragment>
+          );
+        })}
       </MapContainer>
 
       {/* Map Controls Overlay */}
@@ -703,6 +848,12 @@ export default function App() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [sharePoints, setSharePoints] = useState<SharePoint[]>([]);
   const [statusMessage, setStatusMessage] = useState("SYSTEM READY");
+  const [isSharingActive, setIsSharingActive] = useState(false);
+  const [sharingScope, setSharingScope] = useState<'public' | 'contacts'>('public');
+  const [isOfflineMode, setIsOfflineMode] = useState(false);
+  const [alerts, setAlerts] = useState<EmergencyAlert[]>([]);
+  const [showOperations, setShowOperations] = useState(false);
+  const [operationsTab, setOperationsTab] = useState<'sharing' | 'offline' | 'alerts'>('sharing');
   
   const placesLibrary = useMapsLibrary('places');
   const [placesService, setPlacesService] = useState<google.maps.places.PlacesService | null>(null);
@@ -778,10 +929,10 @@ export default function App() {
     return unsubscribe;
   }, []);
 
+  // User history listener
   useEffect(() => {
     if (!user) return;
 
-    // History listener
     const historyQuery = query(
       collection(db, `users/${user.uid}/history`),
       orderBy('timestamp', 'desc'),
@@ -791,9 +942,15 @@ export default function App() {
       const items: HistoryItem[] = [];
       snap.forEach(doc => items.push({ ...doc.data(), id: doc.id } as HistoryItem));
       setHistory(items);
+    }, (error) => {
+      console.error("Error listening to history:", error);
     });
 
-    // Share points listener
+    return unsubHistory;
+  }, [user]);
+
+  // Global live coordinates sharePoints listener
+  useEffect(() => {
     const shareQuery = query(
       collection(db, 'shares'),
       orderBy('timestamp', 'desc'),
@@ -801,15 +958,39 @@ export default function App() {
     );
     const unsubShare = onSnapshot(shareQuery, (snap) => {
       const items: SharePoint[] = [];
-      snap.forEach(doc => items.push(doc.data() as SharePoint));
+      snap.forEach(doc => {
+        const data = doc.data() as SharePoint;
+        if (data.active !== false) {
+          items.push(data);
+        }
+      });
       setSharePoints(items);
+    }, (error) => {
+      console.error("Error listening to shares:", error);
     });
 
-    return () => {
-      unsubHistory();
-      unsubShare();
-    };
-  }, [user]);
+    return unsubShare;
+  }, []);
+
+  // Global emergency alerts listener
+  useEffect(() => {
+    const alertsQuery = query(
+      collection(db, 'alerts'),
+      orderBy('timestamp', 'desc'),
+      limit(50)
+    );
+    const unsubAlerts = onSnapshot(alertsQuery, (snap) => {
+      const list: EmergencyAlert[] = [];
+      snap.forEach(doc => {
+        list.push({ ...doc.data(), id: doc.id } as EmergencyAlert);
+      });
+      setAlerts(list);
+    }, (error) => {
+      console.error("Error listening to alerts:", error);
+    });
+
+    return unsubAlerts;
+  }, []);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -1136,6 +1317,24 @@ export default function App() {
           </button>
 
           <button 
+            onClick={() => {
+              setShowOperations(!showOperations);
+              if (!showOperations) {
+                setShowMenu(false);
+                setShowChat(false);
+                setShowRoutePlanner(false);
+              }
+            }}
+            className={cn(
+              "w-12 h-12 flex items-center justify-center border rounded-full transition-all shadow-2xl backdrop-blur-md",
+              showOperations ? "bg-map-accent border-map-accent text-black" : "bg-black/60 border-map-accent/30 text-map-accent hover:border-map-accent"
+            )}
+            title="Operations Center"
+          >
+            <ShieldAlert size={20} />
+          </button>
+
+          <button 
             onClick={() => setShowRoutePlanner(true)}
             className="w-12 h-12 flex items-center justify-center border rounded-full transition-all shadow-2xl backdrop-blur-md bg-black/60 border-map-accent/30 text-map-accent hover:border-map-accent"
             title="Plan Route"
@@ -1143,6 +1342,139 @@ export default function App() {
             <Navigation size={20} />
           </button>
         </div>
+
+
+      {/* Operations Center Sliding Panel */}
+      <AnimatePresence>
+        {showOperations && (
+          <>
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowOperations(false)}
+              className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[55]"
+            />
+            <motion.div 
+              initial={{ x: '-100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '-100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="fixed top-0 left-0 bottom-0 w-80 md:w-96 bg-map-card border-r border-map-border z-[60] shadow-2xl flex flex-col pt-16"
+            >
+              {/* Header */}
+              <div className="p-4 border-b border-map-border flex justify-between items-center bg-black/40">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 bg-map-accent/10 flex items-center justify-center border border-map-accent/30 rounded-full">
+                    <ShieldAlert className="text-map-accent" size={18} />
+                  </div>
+                  <div>
+                    <h2 className="text-xs font-bold uppercase tracking-widest text-map-accent">Tactical Operations</h2>
+                    <p className="text-[8px] text-map-text-dim uppercase tracking-tighter">Coordination & Intelligence</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setShowOperations(false)} 
+                  className="text-map-text-dim hover:text-map-accent transition-colors p-1"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              {/* Operations Tabs */}
+              <div className="flex border-b border-map-border bg-black/20 text-[10px] font-mono">
+                <button
+                  onClick={() => setOperationsTab('sharing')}
+                  className={cn(
+                    "flex-1 py-3 text-center uppercase tracking-wider border-b-2 transition-all cursor-pointer",
+                    operationsTab === 'sharing' 
+                      ? "border-map-accent text-map-accent bg-map-accent/5 font-bold" 
+                      : "border-transparent text-zinc-400 hover:text-zinc-200"
+                  )}
+                >
+                  Sharing
+                </button>
+                <button
+                  onClick={() => setOperationsTab('offline')}
+                  className={cn(
+                    "flex-1 py-3 text-center uppercase tracking-wider border-b-2 transition-all cursor-pointer",
+                    operationsTab === 'offline' 
+                      ? "border-map-accent text-map-accent bg-map-accent/5 font-bold" 
+                      : "border-transparent text-zinc-400 hover:text-zinc-200"
+                  )}
+                >
+                  Offline
+                </button>
+                <button
+                  onClick={() => setOperationsTab('alerts')}
+                  className={cn(
+                    "flex-1 py-3 text-center uppercase tracking-wider border-b-2 transition-all cursor-pointer",
+                    operationsTab === 'alerts' 
+                      ? "border-map-accent text-map-accent bg-map-accent/5 font-bold" 
+                      : "border-transparent text-zinc-400 hover:text-zinc-200"
+                  )}
+                >
+                  Alerts
+                </button>
+              </div>
+
+              {/* Panel Scrollable Content */}
+              <div className="flex-1 overflow-y-auto p-4 custom-scrollbar bg-black/10">
+                {operationsTab === 'sharing' && (
+                  <LocationSharingPanel
+                    user={user}
+                    currentLocation={currentLocation}
+                    statusMessage={statusMessage}
+                    setStatusMessage={setStatusMessage}
+                    addNotification={addNotification}
+                    isSharingActive={isSharingActive}
+                    setIsSharingActive={setIsSharingActive}
+                    sharingScope={sharingScope}
+                    setSharingScope={setSharingScope}
+                    onFocusLocation={(lat, lng) => {
+                      setCoords([lat, lng]);
+                      setTargetCoords([lat, lng]);
+                      setZoom(14);
+                    }}
+                  />
+                )}
+                {operationsTab === 'offline' && (
+                  <OfflineMapPanel
+                    user={user}
+                    targetCoords={targetCoords}
+                    isOfflineMode={isOfflineMode}
+                    setIsOfflineMode={setIsOfflineMode}
+                    statusMessage={statusMessage}
+                    setStatusMessage={setStatusMessage}
+                    addNotification={addNotification}
+                    onFocusLocation={(lat, lng) => {
+                      setCoords([lat, lng]);
+                      setTargetCoords([lat, lng]);
+                      setZoom(14);
+                    }}
+                  />
+                )}
+                {operationsTab === 'alerts' && (
+                  <EmergencyAlertPanel
+                    user={user}
+                    currentLocation={currentLocation}
+                    targetCoords={targetCoords}
+                    statusMessage={statusMessage}
+                    setStatusMessage={setStatusMessage}
+                    addNotification={addNotification}
+                    onFocusLocation={(lat, lng) => {
+                      setCoords([lat, lng]);
+                      setTargetCoords([lat, lng]);
+                      setZoom(14);
+                    }}
+                    alerts={alerts}
+                  />
+                )}
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
 
 
       {/* Left Side Menu (Toggled by Logo) */}
@@ -1409,6 +1741,8 @@ export default function App() {
               sharePoints={sharePoints}
               isDark={isMapDark}
               onThemeToggle={() => setIsMapDark(!isMapDark)}
+              isOfflineMode={isOfflineMode}
+              alerts={alerts}
             />
           ) : (
             <Map
