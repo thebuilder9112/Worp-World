@@ -1,7 +1,8 @@
 {
-  "name": "SAGITTARIUS WORLD",
+  "name": "WORP WORLD",
   "description": "Tactical disaster and war situation awareness platform with AI-powered terrain analysis and navigation.",
   "requestFramePermissions": [
     "geolocation"
-  ]
+  ],
+  "majorCapabilities": []
 }
